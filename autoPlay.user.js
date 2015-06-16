@@ -442,6 +442,7 @@ function MainLoop() {
 				s().m_nClicks += currentClickRate;
 			} else {
 			  s().m_nClicks += currentClickRate / 5;
+            }
 		}
 		
 		s().m_nLastTick = false;
