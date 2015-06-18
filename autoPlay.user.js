@@ -2,7 +2,7 @@
 // @name Monster Minigame Wormhole Warp (MMWW)
 // @namespace https://github.com/DannyDaemonic/MonsterMinigameWormholeWarp
 // @description A script that runs the Steam Monster Minigame for you.
-// @version 4.8.9.1
+// @version 4.9.0.1
 // @match *://steamcommunity.com/minigame/towerattack*
 // @match *://steamcommunity.com//minigame/towerattack*
 // @grant none
@@ -18,6 +18,8 @@
 // OPTIONS
 var clickRate = 20;
 var logLevel = 1; // 5 is the most verbose, 0 disables all log
+
+var isUserScript = (typeof GM_info !== "undefined");
 
 var enableAutoClicker = getPreferenceBoolean("enableAutoClicker", true);
 
@@ -38,7 +40,7 @@ var disableRenderer = getPreferenceBoolean("disableRenderer", true);
 
 var enableElementLock = getPreferenceBoolean("enableElementLock", true);
 
-var enableAutoRefresh = getPreferenceBoolean("enableAutoRefresh", typeof GM_info !== "undefined");
+var enableAutoRefresh = getPreferenceBoolean("enableAutoRefresh", isUserScript);
 
 var autoRefreshMinutes = 30;
 var autoRefreshMinutesRandomDelay = 10;
@@ -296,7 +298,7 @@ function firstRun() {
 	var sfx_btn = document.querySelector(".toggle_sfx_btn");
 	options_menu.insertBefore(info_box, sfx_btn);
 
-	info_box.innerHTML = '<b>OPTIONS</b>' + ((typeof GM_info !== "undefined") ? ' (v' + GM_info.script.version + ')' : '') + '<br>Settings marked with a <span class="asterisk">*</span> requires a refresh to take effect.<hr>';
+	info_box.innerHTML = '<b>OPTIONS</b>' + (isUserScript ? ' (v' + GM_info.script.version + ')' : '') + '<br>Settings marked with a <span class="asterisk">*</span> requires a refresh to take effect.<hr>';
 
 	var options1 = document.createElement("div");
 	options1.className = "options_column";
@@ -320,7 +322,7 @@ function firstRun() {
 	var options2 = document.createElement("div");
 	options2.className = "options_column";
 
-	if (typeof GM_info !== "undefined") {
+	if (isUserScript) {
 		options2.appendChild(makeCheckBox("enableAutoRefresh", "Enable AutoRefresh (mitigate memory leak)", enableAutoRefresh, toggleAutoRefresh, false));
 	}
 
@@ -420,7 +422,7 @@ function MainLoop() {
 
 		var timeLeft = getTimeleft(); // Time left in minutes
 
-		if(timeLeft <= 15) {
+		if(timeLeft <= 5) {
 			useAllAbilities();
 		} else {
 			useAbilities(level);
@@ -450,7 +452,7 @@ function MainLoop() {
 		if(currentClickRate > 0) {
 			var levelRainingMod = level % CONTROL.rainingRounds;
 
-			absoluteCurrentClickRate = level > CONTROL.speedThreshold && (levelRainingMod === 0 || 3 >= (CONTROL.rainingRounds - levelRainingMod)) ? 0 : currentClickRate;
+			absoluteCurrentClickRate = level >= CONTROL.speedThreshold && (levelRainingMod === 0 || 3 >= (CONTROL.rainingRounds - levelRainingMod)) ? 0 : currentClickRate;
 
 			// throttle back as we approach
 			for(var i = 1; i <= 3; i++) {
@@ -1322,7 +1324,7 @@ function useAbilities(level)
 
 	// Cripple Monster
 	if(canUseAbility(ABILITIES.CRIPPLE_MONSTER)) {
-		if (level > CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
+		if (level >= CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
 			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
 			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
 				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
@@ -1361,16 +1363,22 @@ function useAbilities(level)
 	var levelRainingMod = level % CONTROL.rainingRounds;
 
 	// Wormhole
-	if(level > CONTROL.speedThreshold && levelRainingMod === 0) {
+	if(level >= CONTROL.speedThreshold && levelRainingMod === 0) {
 		enableAbility(ABILITIES.WORMHOLE);
 		enableAbility(ABILITIES.LIKE_NEW);
 
 		advLog('Trying to trigger cooldown and wormhole...', 1);
 
 		tryUsingAbility(ABILITIES.DECREASE_COOLDOWNS, true);
-		tryUsingAbility(ABILITIES.WORMHOLE);
+		tryUsingAbility(ABILITIES.WORMHOLE, false, true);
 
-		if(Math.random() <= 0.2) {
+		// Chance of using at least one like new with X active script users
+		// 10% chance to use
+		// -------
+		// 20  users = 87.84%
+		// 50  users = 99.48%
+		// 100 users = 99.99%
+		if(Math.random() <= 0.1) {
 			tryUsingAbility(ABILITIES.LIKE_NEW, true);
 		}
 
@@ -1619,16 +1627,16 @@ function bHaveItem(itemId) {
 	return false;
 }
 
-function canUseAbility(abilityId) {
+function canUseAbility(abilityId, skipCooldownCheck) {
 	if(!s().bHaveAbility(abilityId) && !bHaveItem(abilityId)) {
 		return false;
 	}
 
-	return s().GetCooldownForAbility(abilityId) <= 0 && isAbilityEnabled(abilityId);
+	return (skipCooldownCheck || s().GetCooldownForAbility(abilityId) <= 0) && isAbilityEnabled(abilityId);
 }
 
-function tryUsingAbility(itemId, checkInLane) {
-	if (!canUseAbility(itemId)) {
+function tryUsingAbility(itemId, checkInLane, skipCooldownCheck) {
+	if (!canUseAbility(itemId, skipCooldownCheck)) {
 		return false;
 	}
 
