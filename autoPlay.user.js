@@ -2,7 +2,7 @@
 // @name Monster Minigame Wormhole Warp (MMWW)
 // @namespace https://github.com/DannyDaemonic/MonsterMinigameWormholeWarp
 // @description A script that runs the Steam Monster Minigame for you.
-// @version 4.8.8.2
+// @version 4.8.9.1
 // @match *://steamcommunity.com/minigame/towerattack*
 // @match *://steamcommunity.com//minigame/towerattack*
 // @grant none
@@ -1369,7 +1369,6 @@ function useAbilities(level)
 
 		tryUsingAbility(ABILITIES.DECREASE_COOLDOWNS, true);
 		tryUsingAbility(ABILITIES.WORMHOLE);
-		tryUsingAbility(ABILITIES.RAINING_GOLD);
 
 		if(Math.random() <= 0.2) {
 			tryUsingAbility(ABILITIES.LIKE_NEW, true);
