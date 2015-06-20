@@ -2,7 +2,7 @@
 // @name Monster Minigame Wormhole Warp (MMWW)
 // @namespace https://github.com/DannyDaemonic/MonsterMinigameWormholeWarp
 // @description A script that runs the Steam Monster Minigame for you.
-// @version 4.9.0.1
+// @version 5.3.0.1
 // @match *://steamcommunity.com/minigame/towerattack*
 // @match *://steamcommunity.com//minigame/towerattack*
 // @grant none
@@ -22,6 +22,7 @@ var logLevel = 1; // 5 is the most verbose, 0 disables all log
 var isUserScript = (typeof GM_info !== "undefined");
 
 var enableAutoClicker = getPreferenceBoolean("enableAutoClicker", true);
+var enableOffensiveAbilities = getPreferenceBoolean("enableOffensiveAbilities", true);
 
 var enableAutoUpgradeHP = getPreferenceBoolean("enableAutoUpgradeHP", true);
 var enableAutoUpgradeClick = getPreferenceBoolean("enableAutoUpgradeClick", false);
@@ -145,10 +146,11 @@ var BOSS_DISABLED_ABILITIES = [
 ];
 
 var CONTROL = {
-	speedThreshold: 2000,
+	speedThreshold: 200,
 	rainingRounds: 100,
 	disableGoldRainLevels: 500,
-	rainingSafeRounds: 10
+	rainingSafeRounds: 10,
+	wormholesPerTick: 10, // you only click once
 };
 
 var GAME_STATUS = {
@@ -229,6 +231,8 @@ function firstRun() {
 		toggleAllText();
 	}
 
+	updateLevelInfoTitle(s().m_rgGameData.level + 1, 0);
+
 	// style
 	var styleNode = document.createElement('style');
 	styleNode.type = 'text/css';
@@ -264,6 +268,8 @@ function firstRun() {
 		".bc_time {color: #9AC0FF;}",
 		// Always show ability count
 		".abilitytemplate > a > .abilityitemquantity {visibility: visible; pointer-events: none;}",
+		// Hide loot notification forever
+		"#loot_notification {display: none !important;}",
 		""
 	];
 	styleNode.textContent = styleText.join("");
@@ -304,6 +310,7 @@ function firstRun() {
 	options1.className = "options_column";
 
 	options1.appendChild(makeCheckBox("enableAutoClicker", "Enable AutoClicker", enableAutoClicker, toggleAutoClicker, false));
+	options1.appendChild(makeCheckBox("enableOffensiveAbilities", "Enable Offensive ability use", enableOffensiveAbilities, toggleOffensiveAbilities, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeHP", "Enable AutoUpgrade HP", enableAutoUpgradeHP, toggleAutoUpgradeHP, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeClick", "Enable AutoUpgrade Clicks", enableAutoUpgradeClick, toggleAutoUpgradeClick, false));
 	options1.appendChild(makeCheckBox("enableAutoUpgradeDPS", "Enable AutoUpgrade DPS", enableAutoUpgradeDPS, toggleAutoUpgradeDPS, false));
@@ -403,20 +410,27 @@ function getTimeleft() {
 function MainLoop() {
 	var status = s().m_rgGameData.status;
 	if(status != GAME_STATUS.RUNNING) {
-		if(disableRenderer) {
-			s().Tick();
-		}
+		render();
 
 		return;
 	}
 
 	var level = s().m_rgGameData.level + 1;
 
+	if(level >= w.g_TuningData.universe_level) {
+		render();
+
+		return;
+	}
 
 	if (!isAlreadyRunning) {
 		isAlreadyRunning = true;
-		
-		goToLaneWithBestTarget(level);
+
+		if (level % CONTROL.rainingRounds === 0) {
+			goToRainingLane();
+		} else {
+			goToLaneWithBestTarget(level);
+		}
 
 		attemptRespawn();
 
@@ -430,10 +444,15 @@ function MainLoop() {
 
 		updatePlayersInGame();
 
-		if( level !== lastLevel ) {
+		if(level !== lastLevel) {
+			if(lastLevel > 0) {
+				updateLevelInfoTitle(level, lastLevel);
+
+				refreshPlayerData();
+			}
+
+			s().m_rgAbilityQueue = [];
 			lastLevel = level;
-			updateLevelInfoTitle(level);
-			refreshPlayerData();
 		}
 
 		// only AutoUpgrade after we've spend all badge points
@@ -452,7 +471,19 @@ function MainLoop() {
 		if(currentClickRate > 0) {
 			var levelRainingMod = level % CONTROL.rainingRounds;
 
-			absoluteCurrentClickRate = level >= CONTROL.speedThreshold && (levelRainingMod === 0 || 3 >= (CONTROL.rainingRounds - levelRainingMod)) ? 0 : currentClickRate;
+			absoluteCurrentClickRate = currentClickRate;
+			// Disable autoclicking if DPS would be too high against a boss (doubtful but possible?)
+			// Doesn't do very good DPS calculation (ignores crit chance / elem mult) 
+			// but should still be very generous
+			if (level >= CONTROL.speedThreshold && levelRainingMod === 0 && enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
+				var currentCritMultiplier = s().m_rgPlayerTechTree.damage_multiplier_crit;
+				var currentCrit = s().m_rgPlayerTechTree.damage_per_click * currentCritMultiplier;
+				var numSecondsToKill = enemy.m_data.max_hp / (currentCrit * 20 * 1500);
+				// If it would take less than a day to kill the boss, disable clicking
+				if(numSecondsToKill < 24 * 60 * 60) {
+					absoluteCurrentClickRate = 0;
+				}
+			}
 
 			// throttle back as we approach
 			for(var i = 1; i <= 3; i++) {
@@ -473,13 +504,7 @@ function MainLoop() {
 
 		advLog("Ticked. Current clicks per second: " + absoluteCurrentClickRate + ". Current damage per second: " + (damagePerClick * absoluteCurrentClickRate), 4);
 
-		if(disableRenderer) {
-			s().Tick();
-
-			requestAnimationFrame(function() {
-				w.g_Minigame.Renderer.render(s().m_Container);
-			});
-		}
+		render();
 
 		isAlreadyRunning = false;
 
@@ -529,6 +554,16 @@ function MainLoop() {
 	}
 }
 
+function render() {
+	if(disableRenderer) {
+		s().Tick();
+
+		requestAnimationFrame(function() {
+			w.g_Minigame.Renderer.render(s().m_Container);
+		});
+	}
+}
+
 function useAutoBadgePurchase() {
 	if(!enableAutoBadgePurchase) { return; }
 
@@ -561,7 +596,7 @@ function useAutoBadgePurchase() {
 		badgePoints += portion;
 	}
 
-	s().m_rgPurchaseItemsQueue = s().m_rgPurchaseItemsQueue.concat(abilityPurchaseQueue);
+	s().m_rgPurchaseItemsQueue = abilityPurchaseQueue;
 	s().m_UI.UpdateSpendBadgePointsDialog();
 }
 
@@ -699,13 +734,16 @@ function useAutoUpgrade() {
 		var tree = upg_map[upg_order[i]];
 
 		// upgrade crit/elemental when necessary
-		if(upg_order[i] === UPGRADES.ARMOR_PIERCING_ROUND) {
-			if(upg_map[UPGRADES.LUCKY_SHOT].cost_per_mult < upg_map[UPGRADES.ARMOR_PIERCING_ROUND].cost_per_mult) {
+		if(
+			(enableAutoUpgradeClick && upg_order[i] === UPGRADES.ARMOR_PIERCING_ROUND)
+			|| (!enableAutoUpgradeClick && enableAutoUpgradeDPS && upg_order[i] === UPGRADES.AUTO_FIRE_CANNON)
+		) {
+			if(enableAutoUpgradeClick && upg_map[UPGRADES.LUCKY_SHOT].cost_per_mult < upg_map[upg_order[i]].cost_per_mult) {
 				tree = upg_map[UPGRADES.LUCKY_SHOT];
 			}
 			else if(enableAutoUpgradeElemental
 					&& upg_map.hasOwnProperty(ELEMENTS.LockedElement+3)
-					&& upg_map[ELEMENTS.LockedElement+3].cost_per_mult < upg_map[UPGRADES.ARMOR_PIERCING_ROUND].cost_per_mult) {
+					&& upg_map[ELEMENTS.LockedElement+3].cost_per_mult < upg_map[upg_order[i]].cost_per_mult) {
 				tree = upg_map[ELEMENTS.LockedElement+3];
 			}
 		}
@@ -772,6 +810,17 @@ function toggleAutoPurchase(event) {
 	}
 
 	enableAutoPurchase = value;
+}
+
+function toggleOffensiveAbilities(event) {
+
+	var value = enableOffensiveAbilities;
+
+	if(event !== undefined) {
+		value = handleCheckBox(event);
+	}
+
+	enableOffensiveAbilities = value;
 }
 
 function refreshPlayerData() {
@@ -1129,6 +1178,26 @@ function updatePlayersInGame() {
 	ELEMENTS.PlayersInGame.textContent = totalPlayers + "/1500";
 }
 
+function goToRainingLane() {
+	// On a WH level, jump everyone to lane 0, unless there is a boss there, in which case jump to lane 1.
+	var targetLane = 0;
+	// Check lane 0, enemy 0 to see if it's a boss.
+	var enemyData = s().GetEnemy(0, 0).m_data;
+	if (typeof enemyData !== "undefined") {
+		var enemyType = enemyData.type;
+		if (enemyType == ENEMY_TYPE.BOSS) {
+			advLog('In lane 0, there is a boss, avoiding', 4);
+			targetLane = 1;
+		}
+	}
+
+	if (s().m_nExpectedLane != targetLane) {
+		advLog('Switching to raining lane' + targetLane, 3);
+		s().TryChangeLane(targetLane);
+	}
+}
+
+
 function goToLaneWithBestTarget(level) {
 	// We can overlook spawners if all spawners are 40% hp or higher and a creep is under 10% hp
 	var spawnerOKThreshold = 0.4;
@@ -1322,20 +1391,6 @@ function useAbilities(level)
 	var enemy = false;
 	var enemyBossHealthPercent = 0;
 
-	// Cripple Monster
-	if(canUseAbility(ABILITIES.CRIPPLE_MONSTER)) {
-		if (level >= CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
-			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
-			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
-				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
-				if (enemyBossHealthPercent>0.5){
-					advLog("Cripple Monster available and used on boss", 2);
-					triggerAbility(ABILITIES.CRIPPLE_MONSTER);
-				}
-			}
-		}
-	}
-
 	// Medic & Pumped Up
 	if (tryUsingAbility(ABILITIES.PUMPED_UP)){
 		// Pumped Up is purchased, cooled down, and needed. Trigger it.
@@ -1362,6 +1417,67 @@ function useAbilities(level)
 
 	var levelRainingMod = level % CONTROL.rainingRounds;
 
+	// Gold Rain
+	if (canUseAbility(ABILITIES.RAINING_GOLD)) {
+		// only use if the speed threshold has not been reached,
+		// or it's a designated gold round after the threshold
+		if (level > CONTROL.disableGoldRainLevels && (level < CONTROL.speedThreshold || level % CONTROL.rainingRounds === 0)) {
+			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
+			// check if current target is a boss, otherwise its not worth using the gold rain
+			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
+				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
+
+				if (enemyBossHealthPercent >= 0.6 || level % CONTROL.rainingRounds === 0) { // We want sufficient time for the gold rain to be applicable
+					// Gold Rain is purchased, cooled down, and needed. Trigger it.
+					advLog('Gold rain is purchased and cooled down, Triggering it on boss', 2);
+					triggerAbility(ABILITIES.RAINING_GOLD);
+				}
+			}
+		}
+	}
+
+	// Metal Detector
+	if(canUseAbility(ABILITIES.METAL_DETECTOR)) {
+
+		enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
+		// check if current target is a boss, otherwise we won't use metal detector
+		if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
+			enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
+
+			// we want to use metal detector at 25% hp, or even less
+			if (enemyBossHealthPercent <= 0.25) { // We want sufficient time for the metal detector to be applicable
+				// Metal Detector is purchased, cooled down, and needed. Trigger it.
+				advLog('Metal Detector is purchased and cooled down, Triggering it on boss', 2);
+				triggerAbility(ABILITIES.METAL_DETECTOR);
+			}
+		}
+	}
+
+	// Treasure
+	if (canUseAbility(ABILITIES.TREASURE)) {
+
+		// check if current level is higher than 50
+		if (level > 50) {
+			enemy = s().GetTargetedEnemy();
+			// check if current target is a boss, otherwise we won't use metal detector
+			if (enemy && enemy.type == ENEMY_TYPE.BOSS) {
+				enemyBossHealthPercent = enemy.hp / enemy.max_hp;
+
+				// we want to use Treasure at 25% hp, or even less
+				if (enemyBossHealthPercent <= 0.25) { // We want sufficient time for the metal detector to be applicable
+					// Treasure is purchased, cooled down, and needed. Trigger it.
+					advLog('Treasure is purchased and cooled down, triggering it.', 2);
+					triggerAbility(ABILITIES.TREASURE);
+				}
+			}
+		}
+		else {
+			// Treasure is purchased, cooled down, and needed. Trigger it.
+			advLog('Treasure is purchased and cooled down, triggering it.', 2);
+			triggerAbility(ABILITIES.TREASURE);
+		}
+	}
+
 	// Wormhole
 	if(level >= CONTROL.speedThreshold && levelRainingMod === 0) {
 		enableAbility(ABILITIES.WORMHOLE);
@@ -1370,16 +1486,15 @@ function useAbilities(level)
 		advLog('Trying to trigger cooldown and wormhole...', 1);
 
 		tryUsingAbility(ABILITIES.DECREASE_COOLDOWNS, true);
-		tryUsingAbility(ABILITIES.WORMHOLE, false, true);
 
-		// Chance of using at least one like new with X active script users
-		// 10% chance to use
-		// -------
-		// 20  users = 87.84%
-		// 50  users = 99.48%
-		// 100 users = 99.99%
-		if(Math.random() <= 0.1) {
-			tryUsingAbility(ABILITIES.LIKE_NEW, true);
+
+		for(var j = 0; j < CONTROL.wormholesPerTick; j++) {
+			tryUsingAbility(ABILITIES.WORMHOLE, false, true);
+
+			// Chance of using at least one like new with X active script users
+			if(Math.random() <= 0.05) {
+				tryUsingAbility(ABILITIES.LIKE_NEW, false, true);
+			}
 		}
 
 		// Exit right now so we don't use any other abilities after wormhole
@@ -1390,10 +1505,24 @@ function useAbilities(level)
 	}
 
 	// Skip doing any damage x levels before upcoming wormhole round
-	if(CONTROL.rainingSafeRounds >= (CONTROL.rainingRounds - levelRainingMod)) {
+	if(!enableOffensiveAbilities || CONTROL.rainingSafeRounds >= (CONTROL.rainingRounds - levelRainingMod)) {
 		tryUsingAbility(ABILITIES.RESURRECTION, true);
 
 		return;
+	}
+
+	// Cripple Monster
+	if(canUseAbility(ABILITIES.CRIPPLE_MONSTER)) {
+		if (level >= CONTROL.speedThreshold && level % CONTROL.rainingRounds !== 0 && level % 10 === 0) {
+			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
+			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
+				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
+				if (enemyBossHealthPercent>0.5){
+					advLog("Cripple Monster available and used on boss", 2);
+					triggerAbility(ABILITIES.CRIPPLE_MONSTER);
+				}
+			}
+		}
 	}
 
 	// Good Luck Charms / Crit
@@ -1532,67 +1661,6 @@ function useAbilities(level)
 		if (enemySpawnerExists && enemySpawnerHealthPercent > 0.95) {
 			advLog("Cripple Spawner available, and needed. Cripple 'em.", 2);
 			triggerAbility(ABILITIES.CRIPPLE_SPAWNER);
-		}
-	}
-
-	// Gold Rain
-	if (canUseAbility(ABILITIES.RAINING_GOLD)) {
-		// only use if the speed threshold has not been reached,
-		// or it's a designated gold round after the threshold
-		if (level > CONTROL.disableGoldRainLevels && (level < CONTROL.speedThreshold || level % CONTROL.rainingRounds === 0)) {
-			enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
-			// check if current target is a boss, otherwise its not worth using the gold rain
-			if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
-				enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
-
-				if (enemyBossHealthPercent >= 0.6 || level % CONTROL.rainingRounds === 0) { // We want sufficient time for the gold rain to be applicable
-					// Gold Rain is purchased, cooled down, and needed. Trigger it.
-					advLog('Gold rain is purchased and cooled down, Triggering it on boss', 2);
-					triggerAbility(ABILITIES.RAINING_GOLD);
-				}
-			}
-		}
-	}
-
-	// Metal Detector
-	if(canUseAbility(ABILITIES.METAL_DETECTOR)) {
-
-		enemy = s().GetEnemy(s().m_rgPlayerData.current_lane, s().m_rgPlayerData.target);
-		// check if current target is a boss, otherwise we won't use metal detector
-		if (enemy && enemy.m_data.type == ENEMY_TYPE.BOSS) {
-			enemyBossHealthPercent = enemy.m_flDisplayedHP / enemy.m_data.max_hp;
-
-			// we want to use metal detector at 25% hp, or even less
-			if (enemyBossHealthPercent <= 0.25) { // We want sufficient time for the metal detector to be applicable
-				// Metal Detector is purchased, cooled down, and needed. Trigger it.
-				advLog('Metal Detector is purchased and cooled down, Triggering it on boss', 2);
-				triggerAbility(ABILITIES.METAL_DETECTOR);
-			}
-		}
-	}
-
-	// Treasure
-	if (canUseAbility(ABILITIES.TREASURE)) {
-
-		// check if current level is higher than 50
-		if (level > 50) {
-			enemy = s().GetTargetedEnemy();
-			// check if current target is a boss, otherwise we won't use metal detector
-			if (enemy && enemy.type == ENEMY_TYPE.BOSS) {
-				enemyBossHealthPercent = enemy.hp / enemy.max_hp;
-
-				// we want to use Treasure at 25% hp, or even less
-				if (enemyBossHealthPercent <= 0.25) { // We want sufficient time for the metal detector to be applicable
-					// Treasure is purchased, cooled down, and needed. Trigger it.
-					advLog('Treasure is purchased and cooled down, triggering it.', 2);
-					triggerAbility(ABILITIES.TREASURE);
-				}
-			}
-		}
-		else {
-			// Treasure is purchased, cooled down, and needed. Trigger it.
-			advLog('Treasure is purchased and cooled down, triggering it.', 2);
-			triggerAbility(ABILITIES.TREASURE);
 		}
 	}
 
@@ -1886,6 +1954,14 @@ function expectedLevel(level) {
 	var expected_level = Math.floor(((level/passed_time)*remaining_time)+level);
 	var likely_level = Math.floor((expected_level - level)/Math.log(3))+ level;
 
+	if(expected_level > w.g_TuningData.universe_level) {
+		expected_level = w.g_TuningData.universe_level;
+	}
+
+	if(likely_level > w.g_TuningData.universe_level) {
+		likely_level = w.g_TuningData.universe_level;
+	}
+
 	return {expected_level : expected_level, likely_level : likely_level, remaining_time : remaining_time};
 }
 
@@ -1926,12 +2002,17 @@ function appendBreadcrumbsTitleInfo() {
 	ELEMENTS.RemainingTime = element;
 }
 
-function updateLevelInfoTitle(level)
+function updateLevelInfoTitle(level, lastLevel)
 {
 	var exp_lvl = expectedLevel(level);
 	var rem_time = countdown(exp_lvl.remaining_time);
 
-	ELEMENTS.ExpectedLevel.textContent = 'Level: ' + level + ', Expected Level: ' + exp_lvl.expected_level + ', Likely Level: ' + exp_lvl.likely_level;
+	ELEMENTS.ExpectedLevel.textContent =
+		'Level: ' + w.FormatNumberForDisplay(level) +
+		', Expected Level: ' + w.FormatNumberForDisplay(exp_lvl.expected_level) +
+		', Likely Level: ' + w.FormatNumberForDisplay(exp_lvl.likely_level) +
+		', Last jump: ' + (lastLevel > 0 ? w.FormatNumberForDisplay(level - lastLevel) : 0);
+
 	ELEMENTS.RemainingTime.textContent = 'Remaining Time: ' + rem_time.hours + ' hours, ' + rem_time.minutes + ' minutes.';
 }
 
