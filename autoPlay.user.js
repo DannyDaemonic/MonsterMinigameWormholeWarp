@@ -570,7 +570,7 @@ function useAutoBadgePurchase() {
 	// id = ability
 	// ratio = how much of the remaining badges to spend
 	var abilityPriorityList = [
-		{ id: ABILITIES.WORMHOLE,   ratio: 0.95 },
+		{ id: ABILITIES.WORMHOLE,   ratio: 1 },
 		{ id: ABILITIES.LIKE_NEW,   ratio: 1 },
 		{ id: ABILITIES.CRIT,       ratio: 1 },
 		{ id: ABILITIES.TREASURE,   ratio: 1 },
